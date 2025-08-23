@@ -1,10 +1,7 @@
-
-
 import sys
 import os
-import argparse
-from datetime import datetime
 import pandas as pd
+import argparse
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
@@ -12,235 +9,74 @@ from data_gathering import FPLDataGatherer
 from data_preprocessing import FPLDataPreprocessor
 from model_training import FPLModelTrainer
 from team_selection import FPLTeamSelector
-from config import Config
-from utils import (
-    setup_logging, create_performance_summary, generate_transfer_suggestions,
-    print_colored_output, validate_data_quality, get_gameweek_info
-)
+from weekly_manager import FPLWeeklyManager
 
 class FPLPredictor:
     
-    def __init__(self, config=Config):
-        self.config = config
-        self.logger = setup_logging()
-        self.config.create_directories()
+    def __init__(self):
+        os.makedirs("models", exist_ok=True)
+        os.makedirs("output", exist_ok=True)
         
         self.data_gatherer = FPLDataGatherer()
-        self.preprocessor = FPLDataPreprocessor(scaler_type=config.SCALER_TYPE)
-        self.trainer = FPLModelTrainer(random_state=config.RANDOM_STATE)
-        self.team_selector = FPLTeamSelector(
-            budget=config.BUDGET, 
-            max_players_per_team=config.MAX_PLAYERS_PER_TEAM
-        )
+        self.preprocessor = FPLDataPreprocessor()
+        self.trainer = FPLModelTrainer()
+        self.team_selector = FPLTeamSelector()
         
-        self.logger.info("FPL Predictor initialized successfully")
-    
-    def run_full_pipeline(self, skip_training: bool = False) -> dict:
+    def run(self):
+        print("🚀 FPL TEAM PREDICTOR")
+        print("=" * 30)
         
-        self.logger.info("🚀 Starting Enhanced FPL Prediction Pipeline")
-        print_colored_output("🚀 ENHANCED FPL PREDICTION SYSTEM", 'bold')
-        print_colored_output("=" * 50, 'cyan')
+        print("\n📊 Getting player data...")
+        players_df, teams_df, fixtures_df = self.data_gatherer.gather_and_process_data()
+        print(f"✅ Got {len(players_df)} players")
         
-        results = {}
+        print("\n🔧 Processing data...")
+        cleaned_df = self.preprocessor.clean_data(players_df)
+        enhanced_df = self.preprocessor.engineer_features(cleaned_df)
+        print(f"✅ Processed {len(enhanced_df)} players")
         
-        try:
-            print_colored_output("\n📊 STEP 1: DATA GATHERING", 'yellow')
-            players_df, teams_df, fixtures_df = self.data_gatherer.gather_and_process_data()
-            self.data_gatherer.save_data(players_df, teams_df, fixtures_df)
-            
-            required_columns = ['first_name', 'second_name', 'total_points', 'now_cost', 'position']
-            quality_report = validate_data_quality(players_df, required_columns)
-            
-            if not quality_report['is_valid']:
-                self.logger.warning("Data quality issues detected")
-                for issue in quality_report['missing_columns']:
-                    self.logger.warning(f"Missing column: {issue}")
-            
-            results['data_gathering'] = {
-                'players_count': len(players_df),
-                'teams_count': len(teams_df),
-                'fixtures_count': len(fixtures_df),
-                'quality_score': 'Good' if quality_report['is_valid'] else 'Issues Detected'
-            }
-            
-            print_colored_output(f"✅ Gathered data for {len(players_df)} players", 'green')
-            
-            print_colored_output("\n🔧 STEP 2: DATA PREPROCESSING", 'yellow')
-            cleaned_df = self.preprocessor.clean_data(players_df)
-            enhanced_df = self.preprocessor.engineer_features(cleaned_df)
-            
-            results['preprocessing'] = {
-                'original_players': len(players_df),
-                'cleaned_players': len(cleaned_df),
-                'final_features': len(enhanced_df.columns)
-            }
-            
-            print_colored_output(f"✅ Processed {len(enhanced_df)} players with {len(enhanced_df.columns)} features", 'green')
-            
-            if not skip_training:
-                print_colored_output("\n🤖 STEP 3: MODEL TRAINING", 'yellow')
-                data_dict = self.preprocessor.prepare_modeling_data(enhanced_df)
-                
-                model_results = self.trainer.train_all_models(
-                    data_dict['X_train'], data_dict['y_train'],
-                    data_dict['X_test'], data_dict['y_test']
-                )
-                
-                ensemble_results = self.trainer.create_ensemble_model(
-                    data_dict['X_train'], data_dict['y_train'],
-                    data_dict['X_test'], data_dict['y_test']
-                )
-                
-                if ensemble_results:
-                    model_results['ensemble'] = ensemble_results
-                
-                self.trainer.save_model(self.config.get_file_path(self.config.MODEL_FILE))
-                
-                report_df = self.trainer.generate_model_report(model_results)
-                report_df.to_csv(self.config.get_file_path(self.config.PERFORMANCE_REPORT_FILE), index=False)
-                
-                feature_importance = self.trainer.get_feature_importance(
-                    self.trainer.best_model, data_dict['feature_names']
-                )
-                feature_importance.to_csv(self.config.get_file_path(self.config.FEATURE_IMPORTANCE_FILE), index=False)
-                
-                predictions = self.trainer.predict_player_points(data_dict['X_full'])
-                enhanced_df['predicted_points'] = predictions
-                
-                best_model_name = min(model_results.keys(), 
-                                    key=lambda x: model_results[x]['test_mse'])
-                best_r2 = model_results[best_model_name]['test_r2']
-                
-                results['model_training'] = {
-                    'best_model': best_model_name,
-                    'best_r2_score': best_r2,
-                    'models_trained': len(model_results),
-                    'features_selected': len(data_dict['feature_names'])
-                }
-                
-                print_colored_output(f"✅ Best model: {best_model_name} (R² = {best_r2:.4f})", 'green')
-                
-            else:
-                print_colored_output("\n🤖 STEP 3: LOADING EXISTING MODEL", 'yellow')
-                model = self.trainer.load_model(self.config.get_file_path(self.config.MODEL_FILE))
-                
-                if model is not None:
-                    enhanced_df['predicted_points'] = (
-                        enhanced_df['total_points'] * 1.1 + 
-                        enhanced_df['form_score'] * 0.3
-                    ).fillna(enhanced_df['total_points'] * 1.1)
-                    print_colored_output("✅ Loaded existing model and made predictions", 'green')
-                else:
-                    enhanced_df['predicted_points'] = enhanced_df['total_points'] * 1.1
-                    print_colored_output("⚠️  No model found, using fallback predictions", 'yellow')
-                
-                results['model_training'] = {
-                    'model_loaded': model is not None,
-                    'prediction_method': 'loaded_model' if model else 'fallback'
-                }
-            
-            enhanced_df.to_csv(self.config.get_file_path(self.config.PLAYER_PREDICTIONS_FILE), index=False)
-            
-            print_colored_output("\n👑 STEP 4: TEAM SELECTION & CAPTAIN CHOICE", 'yellow')
-            team_result = self.team_selector.select_optimal_team(enhanced_df, include_captain=True)
-            
-            team_result['full_squad'].to_csv(
-                self.config.get_file_path(self.config.SELECTED_TEAM_FILE), index=False
+        if os.path.exists("models/best_fpl_model.joblib"):
+            print("\n🤖 Loading existing model...")
+            model = self.trainer.load_model("models/best_fpl_model.joblib")
+            enhanced_df['predicted_points'] = enhanced_df['total_points'] * 1.1
+        else:
+            print("\n🤖 Training model...")
+            data_dict = self.preprocessor.prepare_modeling_data(enhanced_df)
+            model_results = self.trainer.train_all_models(
+                data_dict['X_train'], data_dict['y_train'],
+                data_dict['X_test'], data_dict['y_test']
             )
-            team_result['starting_xi'].to_csv(
-                self.config.get_file_path(self.config.STARTING_XI_FILE), index=False
-            )
-            
-            self._save_simplified_team_output(team_result)
-            
-            team_report = self.team_selector.generate_team_report(team_result)
-            with open(self.config.get_file_path(self.config.TEAM_REPORT_FILE), 'w') as f:
-                f.write(team_report)
-            
-            performance_summary = create_performance_summary(team_result)
-            
-            results['team_selection'] = {
-                'total_cost': team_result['total_cost'],
-                'remaining_budget': team_result['remaining_budget'],
-                'expected_points': performance_summary['expected_points'],
-                'expected_with_captain': performance_summary['expected_points_with_captain'],
-                'captain': team_result['captain_info']['captain']['name'] if team_result['captain_info'] else 'None',
-                'vice_captain': team_result['captain_info']['vice_captain']['name'] if team_result['captain_info'] else 'None'
-            }
-            
-            print_colored_output(f"✅ Team selected with {team_result['total_cost']:.1f}M cost", 'green')
-            
-            print_colored_output("\n🔄 STEP 5: TRANSFER SUGGESTIONS", 'yellow')
-            transfer_suggestions = generate_transfer_suggestions(
-                team_result['starting_xi'], enhanced_df, max_suggestions=3
-            )
-            
-            results['transfer_suggestions'] = len(transfer_suggestions)
-            
-            print_colored_output("\n🎉 PIPELINE COMPLETE!", 'bold')
-            self._print_final_summary(results, team_result, performance_summary)
-            
-            gw_info = get_gameweek_info()
-            if gw_info:
-                results['gameweek_info'] = gw_info
-            
-            return {
-                'success': True,
-                'results': results,
-                'team_result': team_result,
-                'performance_summary': performance_summary,
-                'transfer_suggestions': transfer_suggestions,
-                'timestamp': datetime.now().isoformat()
-            }
-            
-        except Exception as e:
-            self.logger.error(f"Pipeline failed: {e}")
-            print_colored_output(f"❌ Pipeline failed: {e}", 'red')
-            return {
-                'success': False,
-                'error': str(e),
-                'timestamp': datetime.now().isoformat()
-            }
-    
-    def _print_final_summary(self, results: dict, team_result: dict, performance_summary: dict):
+            self.trainer.save_model("models/best_fpl_model.joblib")
+            predictions = self.trainer.predict_player_points(data_dict['X_full'])
+            enhanced_df['predicted_points'] = predictions
         
-        print_colored_output("\n" + "="*60, 'cyan')
-        print_colored_output("📋 FINAL SUMMARY", 'bold')
-        print_colored_output("="*60, 'cyan')
+        print("✅ Model ready")
         
-        print_colored_output(f"\n📊 Data: {results['data_gathering']['players_count']} players processed", 'white')
+        print("\n👑 Selecting team...")
+        team_result = self.team_selector.select_optimal_team(enhanced_df, include_captain=True)
         
-        if 'best_model' in results.get('model_training', {}):
-            model_info = results['model_training']
-            print_colored_output(f"🤖 Model: {model_info['best_model']} (R² = {model_info['best_r2_score']:.4f})", 'white')
+        self.save_results(team_result)
+        self._save_starting_eleven(team_result)
         
-        team_info = results['team_selection']
-        print_colored_output(f"\n👑 SELECTED TEAM:", 'yellow')
-        print_colored_output(f"   💰 Cost: £{team_info['total_cost']:.1f}M (£{team_info['remaining_budget']:.1f}M remaining)", 'white')
-        print_colored_output(f"   📈 Expected Points: {team_info['expected_points']:.1f}", 'white')
-        print_colored_output(f"   ⭐ With Captain: {team_info['expected_with_captain']:.1f}", 'white')
-        print_colored_output(f"   👑 Captain: {team_info['captain']}", 'green')
-        print_colored_output(f"   🥈 Vice-Captain: {team_info['vice_captain']}", 'green')
+        budget_used = team_result['total_cost']
+        budget_remaining = 100.0 - budget_used
+        budget_usage_pct = (budget_used / 100.0) * 100
         
-        print_colored_output(f"\n📁 Generated Files:", 'yellow')
-        files = [
-            "simplified_team.csv",
-            "team_names_only.txt",
-            self.config.SELECTED_TEAM_FILE,
-            self.config.STARTING_XI_FILE,
-            self.config.TEAM_REPORT_FILE,
-            self.config.PLAYER_PREDICTIONS_FILE
-        ]
+        print(f"✅ Team selected!")
+        print(f"💰 Budget: £{budget_used:.1f}M / £100.0M ({budget_usage_pct:.1f}% used)")
+        print(f"💸 Remaining: £{budget_remaining:.1f}M")
         
-        for file in files:
-            if os.path.exists(self.config.get_file_path(file)):
-                print_colored_output(f"   ✅ {file}", 'green')
+        captain = team_result['captain_info']['captain']['name']
+        vice = team_result['captain_info']['vice_captain']['name']
+        print(f"👑 Captain: {captain}")
+        print(f"🥈 Vice-Captain: {vice}")
         
-        print_colored_output("\n🎯 Ready for gameweek! Good luck! 🍀", 'bold')
-        print_colored_output("="*60, 'cyan')
-    
-    def _save_simplified_team_output(self, team_result: dict):
+        print(f"\n📁 Results saved to:")
+        print(f"   • simplified_team.csv")
+        print(f"   • team_names_only.txt")
+        print(f"   • starting_eleven.txt")
         
+    def save_results(self, team_result):
         full_squad = team_result['full_squad']
         
         simplified_squad = pd.DataFrame({
@@ -248,21 +84,19 @@ class FPLPredictor:
             'Position': full_squad['position'],
             'Team': full_squad.get('team_name', 'Team ' + full_squad['team'].astype(str)),
             'Cost': full_squad['now_cost'],
-            'Predicted_Points': full_squad['predicted_points'].round(1)
+            'Points': full_squad['predicted_points'].round(1)
         })
         
         position_order = {'GK': 1, 'DEF': 2, 'MID': 3, 'FWD': 4}
         simplified_squad['pos_order'] = simplified_squad['Position'].map(position_order)
-        simplified_squad = simplified_squad.sort_values(['pos_order', 'Predicted_Points'], ascending=[True, False])
+        simplified_squad = simplified_squad.sort_values(['pos_order', 'Points'], ascending=[True, False])
         simplified_squad = simplified_squad.drop('pos_order', axis=1)
         
-        simplified_squad.to_csv(
-            self.config.get_file_path("simplified_team.csv"), index=False
-        )
+        simplified_squad.to_csv("output/simplified_team.csv", index=False)
         
-        with open(self.config.get_file_path("team_names_only.txt"), 'w') as f:
-            f.write("🏆 YOUR FPL TEAM - SIMPLIFIED VIEW\n")
-            f.write("=" * 40 + "\n\n")
+        with open("output/team_names_only.txt", 'w') as f:
+            f.write("🏆 YOUR FPL TEAM\n")
+            f.write("=" * 20 + "\n\n")
             
             for position in ['GK', 'DEF', 'MID', 'FWD']:
                 pos_players = simplified_squad[simplified_squad['Position'] == position]
@@ -275,31 +109,123 @@ class FPLPredictor:
             if team_result.get('captain_info'):
                 captain = team_result['captain_info']['captain']
                 vice = team_result['captain_info']['vice_captain']
-                f.write("👑 CAPTAIN & VICE-CAPTAIN:\n")
+                f.write("👑 CAPTAIN & VICE:\n")
                 f.write(f"  Captain: {captain['name']}\n")
-                f.write(f"  Vice-Captain: {vice['name']}\n")
+                f.write(f"  Vice: {vice['name']}\n")
+    
+    def _save_starting_eleven(self, team_result):
+        if 'starting_xi' not in team_result:
+            return
+            
+        starting_xi = team_result['starting_xi']
         
-        self.logger.info("Simplified team output saved to simplified_team.csv and team_names_only.txt")
+        starting_df = pd.DataFrame({
+            'Player': starting_xi['first_name'] + ' ' + starting_xi['second_name'],
+            'Position': starting_xi['position'],
+            'Team': starting_xi.get('team_name', 'Team ' + starting_xi['team'].astype(str)),
+            'Cost': starting_xi['now_cost'],
+            'Points': starting_xi['predicted_points'].round(1)
+        })
+        
+        formation = self._get_formation(starting_xi)
+        
+        with open("output/starting_eleven.txt", 'w') as f:
+            f.write("⚽ STARTING XI\n")
+            f.write("=" * 20 + "\n\n")
+            f.write(f"🔥 Formation: {formation}\n\n")
+            
+            for position in ['GK', 'DEF', 'MID', 'FWD']:
+                pos_players = starting_df[starting_df['Position'] == position]
+                if not pos_players.empty:
+                    pos_name = {'GK': 'GOALKEEPER', 'DEF': 'DEFENDERS', 'MID': 'MIDFIELDERS', 'FWD': 'FORWARDS'}[position]
+                    f.write(f"{pos_name}:\n")
+                    for _, player in pos_players.iterrows():
+                        captain_mark = " (C)" if team_result.get('captain_info', {}).get('captain', {}).get('name') == player['Player'] else ""
+                        vice_mark = " (VC)" if team_result.get('captain_info', {}).get('vice_captain', {}).get('name') == player['Player'] else ""
+                        f.write(f"  ⭐ {player['Player']}{captain_mark}{vice_mark} ({player['Team']}) - £{player['Cost']:.1f}M - {player['Points']} pts\n")
+                    f.write("\n")
+            
+            total_cost = starting_xi['now_cost'].sum()
+            total_points = starting_xi['predicted_points'].sum()
+            f.write(f"💰 Starting XI Cost: £{total_cost:.1f}M\n")
+            f.write(f"📊 Expected Points: {total_points:.1f}\n")
+            
+            bench = team_result['full_squad'][~team_result['full_squad'].index.isin(starting_xi.index)]
+            f.write(f"\n🪑 BENCH:\n")
+            for _, player in bench.iterrows():
+                name = f"{player['first_name']} {player['second_name']}"
+                team_name = player.get('team_name', f"Team {player['team']}")
+                f.write(f"  • {name} ({player['position']}) - {team_name} - £{player['now_cost']:.1f}M\n")
+    
+    def _get_formation(self, starting_xi):
+        position_counts = starting_xi['position'].value_counts()
+        defenders = position_counts.get('DEF', 0)
+        midfielders = position_counts.get('MID', 0)  
+        forwards = position_counts.get('FWD', 0)
+        return f"{defenders}-{midfielders}-{forwards}"
 
 def main():
-    
-    parser = argparse.ArgumentParser(description='Enhanced FPL Prediction System')
-    parser.add_argument('--skip-training', action='store_true', 
-                       help='Skip model training and use existing model')
-    parser.add_argument('--budget', type=float, default=100.0,
-                       help='Team budget in millions (default: 100.0)')
-    parser.add_argument('--max-per-team', type=int, default=3,
-                       help='Maximum players per team (default: 3)')
+    parser = argparse.ArgumentParser(description='FPL Team Predictor')
+    parser.add_argument('--mode', choices=['initial', 'weekly', 'transfer'], default='initial',
+                       help='Mode: initial team selection, weekly update, or transfer')
+    parser.add_argument('--gameweek', type=int, help='Gameweek number for weekly update')
+    parser.add_argument('--out', type=str, help='Player to transfer out')
+    parser.add_argument('--player-in', type=str, help='Player to transfer in')
     
     args = parser.parse_args()
     
-    Config.BUDGET = args.budget
-    Config.MAX_PLAYERS_PER_TEAM = args.max_per_team
-    
-    predictor = FPLPredictor()
-    result = predictor.run_full_pipeline(skip_training=args.skip_training)
-    
-    sys.exit(0 if result['success'] else 1)
+    if args.mode == 'weekly':
+        manager = FPLWeeklyManager()
+        result = manager.weekly_update(args.gameweek)
+        
+        print(f"🚀 Weekly update complete for GW{result['gameweek']}")
+        
+        if result['action'] == 'initial_selection':
+            team = result['team']['full_squad']
+            captain = result['team']['captain_info']['captain']['name']
+            print(f"👑 Captain: {captain}")
+            print(f"💰 Team cost: £{team['now_cost'].sum():.1f}M")
+            
+        elif result['action'] == 'transfer_analysis':
+            suggestions = result['transfer_suggestions']['suggestions']
+            if suggestions:
+                print(f"\n🔄 Best transfer suggestions for GW{result['gameweek']}:")
+                for i, suggestion in enumerate(suggestions[:3], 1):
+                    print(f"{i}. {suggestion['out']['name']} → {suggestion['in']['name']}")
+                    print(f"   GW points gain: +{suggestion['gw_point_gain']:.1f}")
+                    print(f"   Cost change: £{suggestion['cost_difference']:+.1f}M")
+                    print()
+            else:
+                print("✅ No beneficial transfers found")
+                
+    elif args.mode == 'transfer':
+        if not args.out or not getattr(args, 'player_in', None):
+            print("Error: --out and --player-in required for transfer mode")
+            return
+            
+        manager = FPLWeeklyManager()
+        current_team = manager.load_current_team()
+        
+        if current_team is None:
+            print("No current team found. Run weekly update first.")
+            return
+            
+        players_df, _, _ = manager.data_gatherer.gather_and_process_data()
+        gw_info = manager.get_current_gameweek()
+        gameweek = args.gameweek or gw_info.get('next', {}).get('id', 1)
+        
+        result = manager.execute_transfer(current_team, args.out, getattr(args, 'player_in'), players_df, gameweek)
+        
+        if result['success']:
+            print(f"✅ Transfer completed: {args.out} → {getattr(args, 'player_in')}")
+            print(f"💰 Cost change: £{result['transfer']['cost_change']:+.1f}M")
+            print(f"💰 New total: £{result['transfer']['new_total_cost']:.1f}M")
+        else:
+            print(f"❌ Transfer failed: {result['error']}")
+            
+    else:
+        predictor = FPLPredictor()
+        predictor.run()
 
 if __name__ == "__main__":
     main()

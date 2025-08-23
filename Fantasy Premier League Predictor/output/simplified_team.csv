@@ -1,16 +1,16 @@
-Player,Position,Team,Cost,Predicted_Points
-Guglielmo Vicario,GK,Spurs,5.0,9.0
-Robin Roefs,GK,Sunderland,4.5,8.0
-Rico Lewis,DEF,Man City,5.0,11.0
-Tino Livramento,DEF,Newcastle,5.0,9.0
-Dan Burn,DEF,Newcastle,5.0,9.0
-Matty Cash,DEF,Aston Villa,4.5,8.0
-Reinildo Mandava,DEF,Sunderland,4.0,6.7
-Tijjani Reijnders,MID,Man City,5.5,10.0
-Matt O'Riley,MID,Brighton,5.5,10.0
-Mohammed Kudus,MID,Spurs,6.5,10.0
-Chemsdine Talbi,MID,Sunderland,5.0,6.0
-Pape Matar Sarr,MID,Spurs,5.0,6.0
-Hugo Ekitiké,FWD,Liverpool,8.5,11.0
-Rodrigo Muniz Carvalho,FWD,Fulham,5.5,7.0
-Niclas Füllkrug,FWD,West Ham,6.0,2.0
+Player,Position,Team,Cost,Points
+David Raya Martín,GK,Arsenal,5.5,11.0
+Jordan Pickford,GK,Everton,5.5,2.2
+Marc Cucurella Saseta,DEF,Chelsea,6.0,14.3
+Rayan Aït-Nouri,DEF,Man City,6.0,9.9
+William Saliba,DEF,Arsenal,6.0,9.9
+Virgil van Dijk,DEF,Liverpool,6.0,3.3
+Jeremie Frimpong,DEF,Liverpool,6.0,1.1
+Enzo Fernández,MID,Chelsea,6.5,14.3
+Lucas Tolentino Coelho de Lima,MID,West Ham,5.9,12.1
+Pedro Lomba Neto,MID,Chelsea,7.0,11.0
+Tijjani Reijnders,MID,Man City,5.6,11.0
+Mohammed Kudus,MID,Spurs,6.5,11.0
+Richarlison de Andrade,FWD,Spurs,6.6,14.3
+Chris Wood,FWD,Nott'm Forest,7.6,14.3
+Hugo Ekitiké,FWD,Liverpool,8.6,12.1

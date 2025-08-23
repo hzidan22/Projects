@@ -1,5 +1,4 @@
 
-
 import pandas as pd
 import numpy as np
 from itertools import combinations
@@ -42,10 +41,10 @@ class FPLTeamSelector:
         fixture_bonus = (5 - player_row.get('fixture_difficulty', 3)) / 5
         
         position_bonus = {
-            'GK': 0.8,
-            'DEF': 0.9,
-            'MID': 1.0,
-            'FWD': 1.1
+            'GK': 0.6,
+            'DEF': 0.8,
+            'MID': 1.2,
+            'FWD': 1.4
         }.get(player_row.get('position', 'MID'), 1.0)
         
         ownership = player_row.get('selected_by_percent', 0)
@@ -65,6 +64,7 @@ class FPLTeamSelector:
         
         predicted_points = player_row.get('predicted_points', 0)
         cost = player_row.get('now_cost', 0.1)
+        position = player_row.get('position', 'MID')
         
         base_value = predicted_points / cost if cost > 0 else 0
         
@@ -77,12 +77,25 @@ class FPLTeamSelector:
         minutes = player_row.get('minutes', 0)
         reliability = min(1.0, minutes / 1500)
         
+        position_priority = {
+            'FWD': 1.3,
+            'MID': 1.2, 
+            'DEF': 0.9,
+            'GK': 0.8
+        }.get(position, 1.0)
+        
+        points_bonus = 1.0
+        if predicted_points > 8:
+            points_bonus = 1.2
+        elif predicted_points > 12:
+            points_bonus = 1.4
+        
         captain_bonus = 1.0
         if captain_potential:
             captain_score = self.calculate_captain_score(player_row)
             captain_bonus = 1 + (captain_score / max(predicted_points, 1) - 1) * 0.1
         
-        final_value = base_value * form_multiplier * fixture_multiplier * reliability * captain_bonus
+        final_value = base_value * form_multiplier * fixture_multiplier * reliability * position_priority * points_bonus * captain_bonus
         return final_value
     
     def select_optimal_team(self, players_df: pd.DataFrame, include_captain: bool = True) -> Dict:
@@ -109,8 +122,15 @@ class FPLTeamSelector:
         position_counts = defaultdict(int)
         total_cost = 0
         
-        for position in ['GK', 'DEF', 'MID', 'FWD']:
+        # Select players in order of priority: FWD -> MID -> DEF -> GK
+        priority_order = ['FWD', 'MID', 'DEF', 'GK']
+        
+        for position in priority_order:
             position_players = players[players['position'] == position]
+            # For attackers and midfielders, sort by predicted points first
+            if position in ['FWD', 'MID']:
+                position_players = position_players.sort_values('predicted_points', ascending=False)
+            
             needed = self.position_limits[position]['min']
             selected_position = []
             
@@ -132,6 +152,9 @@ class FPLTeamSelector:
         selected_indices = [p.name for p in selected_team]
         remaining_players = players[~players.index.isin(selected_indices)]
         
+        # Sort remaining players by predicted points for maximum budget usage
+        remaining_players = remaining_players.sort_values('predicted_points', ascending=False)
+        
         for _, player in remaining_players.iterrows():
             if (len(selected_team) < 15 and
                 team_counts[player['team']] < self.max_players_per_team and
@@ -143,6 +166,53 @@ class FPLTeamSelector:
                 position_counts[player['position']] += 1
                 total_cost += player['now_cost']
                 remaining_budget -= player['now_cost']
+        
+        # Aggressive budget optimization - upgrade players to use more budget
+        min_budget_usage = 95.0  # Use at least £95M
+        upgrade_attempts = 50  # More attempts
+        
+        while total_cost < min_budget_usage and upgrade_attempts > 0 and len(selected_team) == 15:
+            upgrade_attempts -= 1
+            current_team = pd.DataFrame(selected_team)
+            remaining_budget = self.budget - total_cost
+            
+            if remaining_budget < 0.5:  # Less than £0.5M remaining
+                break
+                
+            # Try upgrading any player, not just the cheapest
+            upgrade_candidates = current_team.sort_values(['now_cost', 'predicted_points'], ascending=[True, True])
+            
+            upgraded = False
+            for _, current_player in upgrade_candidates.iterrows():
+                if upgraded:
+                    break
+                    
+                # Look for better players in the same position
+                same_position_players = players[
+                    (players['position'] == current_player['position']) &
+                    (~players.index.isin([p.name for p in selected_team])) &
+                    (players['now_cost'] > current_player['now_cost']) &
+                    (players['now_cost'] <= current_player['now_cost'] + remaining_budget)
+                ].sort_values('predicted_points', ascending=False)
+                
+                for _, upgrade_player in same_position_players.iterrows():
+                    # Check team constraints
+                    team_count = sum(1 for p in selected_team if p['team'] == upgrade_player['team'])
+                    if current_player['team'] == upgrade_player['team']:
+                        team_count -= 1
+                    
+                    if team_count < self.max_players_per_team:
+                        cost_diff = upgrade_player['now_cost'] - current_player['now_cost']
+                        if cost_diff <= remaining_budget and cost_diff >= 0.1:  # At least £0.1M upgrade
+                            # Perform the upgrade
+                            selected_team = [p for p in selected_team if p.name != current_player.name]
+                            selected_team.append(upgrade_player)
+                            total_cost += cost_diff
+                            upgraded = True
+                            break
+            
+            if not upgraded:
+                break
         
         team_df = pd.DataFrame(selected_team)
         
